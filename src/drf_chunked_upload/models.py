@@ -11,22 +11,23 @@ from django.utils import timezone
 from drf_chunked_upload import settings as _settings
 
 
-AUTH_USER_MODEL = getattr(settings, 'AUTH_USER_MODEL', 'auth.User')
+AUTH_USER_MODEL = getattr(settings, "AUTH_USER_MODEL", "auth.User")
 
 
 def generate_filename(instance, filename):
-    upload_dir = getattr(instance, 'upload_dir', _settings.UPLOAD_PATH)
+    upload_dir = getattr(instance, "upload_dir", _settings.UPLOAD_PATH)
     filename = os.path.join(upload_dir, str(instance.id) + _settings.INCOMPLETE_EXT)
     return time.strftime(filename)
 
 
 class AbstractChunkedUpload(models.Model):
-    '''Inherit from this model if you are implementing your own.'''
+    """Inherit from this model if you are implementing your own."""
+
     UPLOADING = 1
     COMPLETE = 2
     STATUS_CHOICES = (
-        (UPLOADING, 'Incomplete'),
-        (COMPLETE, 'Complete'),
+        (UPLOADING, "Incomplete"),
+        (COMPLETE, "Complete"),
     )
     id = models.UUIDField(
         primary_key=True,
@@ -69,10 +70,10 @@ class AbstractChunkedUpload(models.Model):
 
     @property
     def checksum(self, rehash=False):
-        if getattr(self, '_checksum', None) is None or rehash is True:
+        if getattr(self, "_checksum", None) is None or rehash is True:
             h = hashlib.new(_settings.CHECKSUM_TYPE)
             self.file.close()
-            self.file.open(mode='rb')
+            self.file.open(mode="rb")
             for chunk in self.file.chunks():
                 h.update(chunk)
                 self._checksum = h.hexdigest()
@@ -92,7 +93,7 @@ class AbstractChunkedUpload(models.Model):
             self.delete_file()
 
     def __repr__(self):
-        return '<{} - upload_id: {} - bytes: {} - status: {}>'.format(
+        return "<{} - upload_id: {} - bytes: {} - status: {}>".format(
             self.filename,
             self.id,
             self.offset,
@@ -101,12 +102,12 @@ class AbstractChunkedUpload(models.Model):
 
     def append_chunk(self, chunk, chunk_size=None, save=True):
         self.file.close()
-        self.file.open(mode='ab')
+        self.file.open(mode="ab")
         for subchunk in chunk.chunks():
             self.file.write(subchunk)
         if chunk_size is not None:
             self.offset += chunk_size
-        elif hasattr(chunk, 'size'):
+        elif hasattr(chunk, "size"):
             self.offset += chunk.size
         else:
             self.offset = self.file.size
@@ -118,9 +119,8 @@ class AbstractChunkedUpload(models.Model):
 
     def get_uploaded_file(self):
         self.file.close()
-        self.file.open(mode='rb')
-        return UploadedFile(file=self.file, name=self.filename,
-                            size=self.file.size)
+        self.file.open(mode="rb")
+        return UploadedFile(file=self.file, name=self.filename, size=self.file.size)
 
     @transaction.atomic
     def completed(self, completed_at=None, ext=_settings.COMPLETE_EXT):
@@ -144,11 +144,14 @@ class AbstractChunkedUpload(models.Model):
 
 
 class ChunkedUpload(AbstractChunkedUpload):
-    '''Concrete model if you are not implementing your own.'''
-    user = models.ForeignKey(AUTH_USER_MODEL,
-                             related_name="%(class)s",
-                             editable=False,
-                             on_delete=models.CASCADE)
+    """Concrete model if you are not implementing your own."""
+
+    user = models.ForeignKey(
+        AUTH_USER_MODEL,
+        related_name="%(class)s",
+        editable=False,
+        on_delete=models.CASCADE,
+    )
 
     class Meta:
         abstract = _settings.ABSTRACT_MODEL

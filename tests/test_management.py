@@ -18,15 +18,16 @@ try:
     from random import randbytes
 except ImportError:
     import random
+
     def randbytes(n):
         """Generate n random bytes."""
-        return random.getrandbits(n * 8).to_bytes(n, 'little')
+        return random.getrandbits(n * 8).to_bytes(n, "little")
 
 
 @pytest.fixture(autouse=True)
 def use_tmp_upload_dir(tmp_path, settings):
     settings.MEDIA_ROOT = str(tmp_path)
-    settings.DRF_CHUNKED_UPLOAD_PATH = ''
+    settings.DRF_CHUNKED_UPLOAD_PATH = ""
     importlib.reload(_settings)
 
 
@@ -38,15 +39,15 @@ def short_expirations(settings):
 
 @pytest.fixture()
 def user1():
-    return User.objects.create_user(username='testuser1', password='12345')
+    return User.objects.create_user(username="testuser1", password="12345")
 
 
 @pytest.fixture()
 def user1_uploads(user1):
     uploads = []
     for i in range(4):
-        f = UploadedFile(file=io.BytesIO(randbytes(100)), name=f'file{i}')
-        cu = ChunkedUpload(user=user1, file=f, filename='fakefile')
+        f = UploadedFile(file=io.BytesIO(randbytes(100)), name=f"file{i}")
+        cu = ChunkedUpload(user=user1, file=f, filename="fakefile")
         cu.save()
         uploads.append(cu)
 
@@ -76,14 +77,16 @@ def test_delete_expired_uploads(settings, user1_uploads, short_expirations):
 
     # call managment command to clean up expired upload files and records
     management.call_command(
-        'delete_expired_uploads',
-        'drf_chunked_upload.ChunkedUpload',
-        'auth.User',
-        'not_a.real_model',
+        "delete_expired_uploads",
+        "drf_chunked_upload.ChunkedUpload",
+        "auth.User",
+        "not_a.real_model",
     )
 
     # we should only have the completed file
-    assert sorted([f.name for f in path.iterdir()]) == status_files[ChunkedUpload.COMPLETE]
+    assert (
+        sorted([f.name for f in path.iterdir()]) == status_files[ChunkedUpload.COMPLETE]
+    )
 
     # make sure expired records are gone but we still have the completed one
     for ul in user1_uploads:
@@ -116,10 +119,12 @@ def test_delete_expired_uploads_two_stage(settings, user1_uploads, short_expirat
     assert sum([1 for ul in user1_uploads if ul.expired])
 
     # call managment command to clean up expired upload files but leave records
-    management.call_command('delete_expired_uploads', '-k')
+    management.call_command("delete_expired_uploads", "-k")
 
     # we should only have the completed file
-    assert sorted([f.name for f in path.iterdir()]) == status_files[ChunkedUpload.COMPLETE]
+    assert (
+        sorted([f.name for f in path.iterdir()]) == status_files[ChunkedUpload.COMPLETE]
+    )
 
     # ensure the records all exist
     for ul in user1_uploads:
@@ -129,7 +134,7 @@ def test_delete_expired_uploads_two_stage(settings, user1_uploads, short_expirat
             assert False, f"Missing chunked upload records per exception '{e}'"
 
     # call managment command to clean up expired upload records
-    management.call_command('delete_expired_uploads')
+    management.call_command("delete_expired_uploads")
 
     # make sure expired records are gone but we still have the completed one
     for ul in user1_uploads:

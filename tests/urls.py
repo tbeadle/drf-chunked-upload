@@ -6,11 +6,13 @@ except ImportError:
 from drf_chunked_upload.views import ChunkedUploadView
 
 
-UUID = r"[a-fA-F0-9]{{8}}-" + \
-       r"[a-fA-F0-9]{{4}}-" + \
-       r"[a-fA-F0-9]{{4}}-" + \
-       r"[a-fA-F0-9]{{4}}-" + \
-       r"[a-fA-F0-9]{{12}}"
+UUID = (
+    r"[a-fA-F0-9]{{8}}-"
+    + r"[a-fA-F0-9]{{4}}-"
+    + r"[a-fA-F0-9]{{4}}-"
+    + r"[a-fA-F0-9]{{4}}-"
+    + r"[a-fA-F0-9]{{12}}"
+)
 ID_QUERY = r"(?P<{id}>{uuid})".format(uuid=UUID, id="{id}")
 PK_QUERY = ID_QUERY.format(id="pk")
 
