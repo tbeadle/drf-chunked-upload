@@ -3,8 +3,9 @@
 from django.conf import settings
 from django.db import migrations, models
 import django.db.models.deletion
-import drf_chunked_upload.models
 import uuid
+
+import adrf_chunked_upload.models
 
 
 class Migration(migrations.Migration):
@@ -33,7 +34,7 @@ class Migration(migrations.Migration):
                     models.FileField(
                         max_length=255,
                         null=True,
-                        upload_to=drf_chunked_upload.models.generate_filename,
+                        upload_to=adrf_chunked_upload.models.generate_filename,
                     ),
                 ),
                 ("filename", models.CharField(max_length=255)),
@@ -51,7 +52,7 @@ class Migration(migrations.Migration):
                     models.ForeignKey(
                         editable=False,
                         on_delete=django.db.models.deletion.CASCADE,
-                        related_name="chunkedupload",
+                        related_name="%(class)s",
                         to=settings.AUTH_USER_MODEL,
                     ),
                 ),

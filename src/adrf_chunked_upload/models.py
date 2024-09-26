@@ -3,12 +3,14 @@ import os.path
 import hashlib
 import uuid
 
+import aiofiles
+import aiofiles.os
 from django.db import models, transaction
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 from django.utils import timezone
 
-from drf_chunked_upload import settings as _settings
+from adrf_chunked_upload import settings as _settings
 
 
 AUTH_USER_MODEL = getattr(settings, "AUTH_USER_MODEL", "auth.User")
@@ -23,12 +25,10 @@ def generate_filename(instance, filename):
 class AbstractChunkedUpload(models.Model):
     """Inherit from this model if you are implementing your own."""
 
-    UPLOADING = 1
-    COMPLETE = 2
-    STATUS_CHOICES = (
-        (UPLOADING, "Incomplete"),
-        (COMPLETE, "Complete"),
-    )
+    class StatusChoices(models.IntegerChoices):
+        UPLOADING = 1, "Incomplete"
+        COMPLETE = 2, "Complete"
+
     id = models.UUIDField(
         primary_key=True,
         default=uuid.uuid4,
@@ -47,8 +47,8 @@ class AbstractChunkedUpload(models.Model):
         editable=False,
     )
     status = models.PositiveSmallIntegerField(
-        choices=STATUS_CHOICES,
-        default=UPLOADING,
+        choices=StatusChoices,
+        default=StatusChoices.UPLOADING,
     )
     completed_at = models.DateTimeField(
         null=True,
@@ -61,23 +61,25 @@ class AbstractChunkedUpload(models.Model):
 
     @property
     def expired(self):
-        return self.status == self.UPLOADING and self.expires_at <= timezone.now()
+        return (
+            self.status == self.StatusChoices.UPLOADING
+            and self.expires_at <= timezone.now()
+        )
 
-    @property
-    def md5(self, rehash=False):
-        # method for backwards compatibility
-        return self.checksum(rehash)
-
-    @property
-    def checksum(self, rehash=False):
-        if getattr(self, "_checksum", None) is None or rehash is True:
-            h = hashlib.new(_settings.CHECKSUM_TYPE)
-            self.file.close()
-            self.file.open(mode="rb")
-            for chunk in self.file.chunks():
+    @staticmethod
+    async def calculate_checksum(filelike):
+        h = hashlib.new(_settings.CHECKSUM_TYPE)
+        with aiofiles.open(filelike, mode="rb") as fil:
+            while True:
+                chunk = await fil.read(64 * 2**10)
+                if not chunk:
+                    break
                 h.update(chunk)
-                self._checksum = h.hexdigest()
-            self.file.close()
+        return h.hexdigest()
+
+    async def checksum(self, rehash=False):
+        if getattr(self, "_checksum", None) is None or rehash is True:
+            self._checksum = await self.calculate_checksum(self.file)
         return self._checksum
 
     def delete_file(self):
@@ -100,41 +102,34 @@ class AbstractChunkedUpload(models.Model):
             self.status,
         )
 
-    def append_chunk(self, chunk, chunk_size=None, save=True):
-        self.file.close()
-        self.file.open(mode="ab")
-        for subchunk in chunk.chunks():
-            self.file.write(subchunk)
+    async def append_chunk(self, chunk, chunk_size=None, save=True):
+        with aiofiles.open(self.file, mode="ab") as fil:
+            for subchunk in chunk.chunks():
+                await fil.write(subchunk)
         if chunk_size is not None:
             self.offset += chunk_size
         elif hasattr(chunk, "size"):
             self.offset += chunk.size
         else:
-            self.offset = self.file.size
+            self.offset = await aiofiles.os.path.getsize(self.file.path)
         # clear any cached checksum
         self._checksum = None
         if save:
-            self.save()
-        self.file.close()
-
-    def get_uploaded_file(self):
-        self.file.close()
-        self.file.open(mode="rb")
-        return UploadedFile(file=self.file, name=self.filename, size=self.file.size)
+            await self.asave()
 
     @transaction.atomic
-    def completed(self, completed_at=None, ext=_settings.COMPLETE_EXT):
+    async def completed(self, completed_at=None, ext=_settings.COMPLETE_EXT):
         if completed_at is None:
             completed_at = timezone.now()
 
         if ext != _settings.INCOMPLETE_EXT:
             original_path = self.file.path
             self.file.name = os.path.splitext(self.file.name)[0] + ext
-        self.status = self.COMPLETE
+        self.status = self.StatusChoices.COMPLETE
         self.completed_at = completed_at
-        self.save()
+        await self.asave()
         if ext != _settings.INCOMPLETE_EXT:
-            os.rename(
+            await aiofiles.os.rename(
                 original_path,
                 os.path.splitext(self.file.path)[0] + ext,
             )

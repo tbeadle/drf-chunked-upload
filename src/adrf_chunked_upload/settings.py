@@ -2,34 +2,41 @@ from datetime import timedelta
 
 from django.conf import settings
 
+_PREFIX = "ADRF_CHUNKED_UPLOAD"
 
 # How long after creation the upload will expire
 DEFAULT_EXPIRATION_DELTA = timedelta(days=1)
 EXPIRATION_DELTA = getattr(
-    settings, "DRF_CHUNKED_UPLOAD_EXPIRATION_DELTA", DEFAULT_EXPIRATION_DELTA
+    settings, f"{_PREFIX}_EXPIRATION_DELTA", DEFAULT_EXPIRATION_DELTA
 )
+
+INCLUDE_FILE_URL_IN_RESPONSE = getattr(
+    settings, f"{_PREFIX}_INCLUDE_FILE_URL_IN_RESPONSE", False
+)
+
+# URL_BASENAME = getattr(settings, f"{_PREFIX}_URL_BASENAME", "chunkedupload")
 
 # Path where uploading files will be stored until completion
 DEFAULT_UPLOAD_PATH = "chunked_uploads/%Y/%m/%d"
-UPLOAD_PATH = getattr(settings, "DRF_CHUNKED_UPLOAD_PATH", DEFAULT_UPLOAD_PATH)
+UPLOAD_PATH = getattr(settings, f"{_PREFIX}_PATH", DEFAULT_UPLOAD_PATH)
 
 # Checksum type to use when verifying files
 DEFAULT_CHECKSUM_TYPE = "md5"
-CHECKSUM_TYPE = getattr(settings, "DRF_CHUNKED_UPLOAD_CHECKSUM", DEFAULT_CHECKSUM_TYPE)
+CHECKSUM_TYPE = getattr(settings, f"{_PREFIX}_CHECKSUM", DEFAULT_CHECKSUM_TYPE)
 
 # File extensions for upload files
-COMPLETE_EXT = getattr(settings, "DRF_CHUNKED_UPLOAD_COMPLETE_EXT", ".done")
-INCOMPLETE_EXT = getattr(settings, "DRF_CHUNKED_UPLOAD_INCOMPLETE_EXT", ".part")
+COMPLETE_EXT = getattr(settings, f"{_PREFIX}_COMPLETE_EXT", ".done")
+INCOMPLETE_EXT = getattr(settings, f"{_PREFIX}_INCOMPLETE_EXT", ".part")
 
 # Storage system
-STORAGE = getattr(settings, "DRF_CHUNKED_UPLOAD_STORAGE_CLASS", lambda: None)()
+STORAGE = getattr(settings, f"{_PREFIX}_STORAGE_CLASS", lambda: None)()
 
 # Boolean that defines if the ChunkedUpload model is abstract or not
-ABSTRACT_MODEL = getattr(settings, "DRF_CHUNKED_UPLOAD_ABSTRACT_MODEL", True)
+ABSTRACT_MODEL = getattr(settings, f"{_PREFIX}_ABSTRACT_MODEL", True)
 
 # Boolean that defines if users beside the creator can access an upload record
-USER_RESTRICTED = getattr(settings, "DRF_CHUNKED_UPLOAD_USER_RESTRICTED", True)
+USER_RESTRICTED = getattr(settings, f"{_PREFIX}_USER_RESTRICTED", True)
 
 # Max amount of data (in bytes) that can be uploaded. `None` means no limit
 DEFAULT_MAX_BYTES = None
-MAX_BYTES = getattr(settings, "DRF_CHUNKED_UPLOAD_MAX_BYTES", DEFAULT_MAX_BYTES)
+MAX_BYTES = getattr(settings, f"{_PREFIX}_MAX_BYTES", DEFAULT_MAX_BYTES)

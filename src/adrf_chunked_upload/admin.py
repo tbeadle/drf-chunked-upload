@@ -1,7 +1,7 @@
 from django.contrib import admin
 
-from drf_chunked_upload.models import ChunkedUpload
-from drf_chunked_upload import settings as _settings
+from adrf_chunked_upload.models import ChunkedUpload
+from adrf_chunked_upload import settings as _settings
 
 if not _settings.ABSTRACT_MODEL:  # If the model exists
 
