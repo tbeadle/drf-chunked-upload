@@ -88,8 +88,8 @@ class ChunkedUploadMixin:
 
         return await self.on_completion(chunked_upload, checksum)
 
-    def get_chunk(self, serializer: ChunkedUploadSerializer):
-        chunk = serializer.validated_data["file"]
+    def get_chunk(self):
+        chunk = self.serializer.validated_data["file"]
         filename = getattr(chunk, "name", "")
         if not filename:
             raise ChunkedUploadError(
@@ -206,10 +206,10 @@ class ChunkedUploadDetailView(ChunkedUploadMixin, RetrieveAPIView):
         """Finish a chunked upload."""
         chunked_upload = await self.aget_object()
         self.assert_upload_is_incomplete(chunked_upload)
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        self.serializer = self.get_serializer(data=request.data)
+        self.serializer.is_valid(raise_exception=True)
         response = await self.finalize_upload(
-            chunked_upload, serializer.validated_data[_settings.CHECKSUM_TYPE]
+            chunked_upload, self.serializer.validated_data[_settings.CHECKSUM_TYPE]
         )
         if response is None:
             response = await self.get_response(chunked_upload)
@@ -225,27 +225,23 @@ class ChunkedUploadDetailView(ChunkedUploadMixin, RetrieveAPIView):
     async def update_chunked_upload_from_request(
         self, request, instance: ChunkedUploadMixin.model
     ):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data, start = self.get_chunk(serializer)
+        self.serializer = self.get_serializer(data=request.data)
+        self.serializer.is_valid(raise_exception=True)
+        data, start = self.get_chunk()
         if instance.offset != start:
             raise ChunkedUploadError(
                 status=status.HTTP_400_BAD_REQUEST,
                 detail=f"Start of content-range ({start}) does not match expected value ({instance.offset})",
             )
         await instance.append_chunk(data["file"])
-        return serializer
 
 
 class ChunkedUploadListView(ChunkedUploadMixin, ListAPIView):
     async def create_chunked_upload_from_request(self, request):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        data, _ = self.get_chunk(serializer)
-        return (
-            await self.model.objects.acreate(user=self.get_user(), **data),
-            serializer,
-        )
+        self.serializer = self.get_serializer(data=request.data)
+        self.serializer.is_valid(raise_exception=True)
+        data, _ = self.get_chunk()
+        return await self.model.objects.acreate(user=self.get_user(), **data)
 
     def get_serializer_class(self) -> Type[adrf_serializers.Serializer]:
         if self.request.method in ("GET", "HEAD"):
@@ -267,11 +263,9 @@ class ChunkedUploadListView(ChunkedUploadMixin, ListAPIView):
 
     async def post(self, request, *args, **kwargs) -> Response:
         """Upload an entire file."""
-        chunked_upload, serializer = await self.create_chunked_upload_from_request(
-            request
-        )
+        chunked_upload = await self.create_chunked_upload_from_request(request)
         response = await self.finalize_upload(
-            chunked_upload, serializer.validated_data[_settings.CHECKSUM_TYPE]
+            chunked_upload, self.serializer.validated_data[_settings.CHECKSUM_TYPE]
         )
         if response is None:
             response = await self.get_response(chunked_upload)
@@ -279,5 +273,5 @@ class ChunkedUploadListView(ChunkedUploadMixin, ListAPIView):
 
     async def put(self, request, *args, **kwargs) -> Response:
         """Start a chunked upload."""
-        chunked_upload, _ = await self.create_chunked_upload_from_request(request)
+        chunked_upload = await self.create_chunked_upload_from_request(request)
         return await self.get_response(chunked_upload)
