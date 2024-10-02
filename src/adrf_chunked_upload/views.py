@@ -80,13 +80,13 @@ class ChunkedUploadMixin:
 
     async def finalize_upload(
         self, chunked_upload: ChunkedUpload, checksum: str
-    ) -> Response:
+    ) -> Optional[Response]:
         if self.do_checksum_check:
             await self.checksum_check(chunked_upload, checksum)
 
         await chunked_upload.completed()
 
-        await self.on_completion(chunked_upload)
+        return await self.on_completion(chunked_upload)
 
     def get_chunk(self, serializer: ChunkedUploadSerializer):
         chunk = serializer.validated_data["file"]
@@ -165,12 +165,13 @@ class ChunkedUploadMixin:
     def get_response_serializer_class(self):
         return self.response_serializer_class
 
-    async def on_completion(self, chunked_upload: model):
+    async def on_completion(self, chunked_upload: model) -> Optional[Response]:
         """
-        Validation or operations to run when upload is complete.
-        Returns an HTTP response.
+        This may be overridden in child classes to do more validation or operations
+        to run when upload is complete.
+        It may return either a Response object or None to have get_response() used.
         """
-        pass
+        return None
 
 
 class ChunkedUploadDetailView(ChunkedUploadMixin, RetrieveAPIView):
@@ -205,10 +206,12 @@ class ChunkedUploadDetailView(ChunkedUploadMixin, RetrieveAPIView):
         self.assert_upload_is_incomplete(chunked_upload)
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        await self.finalize_upload(
+        response = await self.finalize_upload(
             chunked_upload, serializer.validated_data[_settings.CHECKSUM_TYPE]
         )
-        return await self.get_response(chunked_upload)
+        if response is None:
+            response = await self.get_response(chunked_upload)
+        return response
 
     async def put(self, request, pk, *args, **kwargs) -> Response:
         """Upload another chunk of a sample."""
@@ -265,10 +268,12 @@ class ChunkedUploadListView(ChunkedUploadMixin, ListAPIView):
         chunked_upload, serializer = await self.create_chunked_upload_from_request(
             request
         )
-        await self.finalize_upload(
+        response = await self.finalize_upload(
             chunked_upload, serializer.validated_data[_settings.CHECKSUM_TYPE]
         )
-        return await self.get_response(chunked_upload)
+        if response is None:
+            response = await self.get_response(chunked_upload)
+        return response
 
     async def put(self, request, *args, **kwargs) -> Response:
         """Start a chunked upload."""
