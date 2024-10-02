@@ -86,7 +86,7 @@ class ChunkedUploadMixin:
 
         await chunked_upload.completed()
 
-        return await self.on_completion(chunked_upload)
+        return await self.on_completion(chunked_upload, checksum)
 
     def get_chunk(self, serializer: ChunkedUploadSerializer):
         chunk = serializer.validated_data["file"]
@@ -165,7 +165,9 @@ class ChunkedUploadMixin:
     def get_response_serializer_class(self):
         return self.response_serializer_class
 
-    async def on_completion(self, chunked_upload: model) -> Optional[Response]:
+    async def on_completion(
+        self, chunked_upload: model, checksum: str
+    ) -> Optional[Response]:
         """
         This may be overridden in child classes to do more validation or operations
         to run when upload is complete.
