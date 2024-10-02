@@ -1,4 +1,3 @@
-from datetime import timedelta
 from django.conf import settings
 
 
@@ -12,7 +11,7 @@ def pytest_configure():
         SITE_ID=1,
         SECRET_KEY="secret key",
         STATIC_URL="/static/",
-        ROOT_URLCONF="tests.urls",
+        ROOT_URLCONF="adrf_chunked_upload.urls",
         MIDDLEWARE=(
             "django.middleware.common.CommonMiddleware",
             "django.contrib.sessions.middleware.SessionMiddleware",
@@ -23,11 +22,14 @@ def pytest_configure():
             "django.contrib.admin",
             "django.contrib.auth",
             "django.contrib.contenttypes",
+            "django.contrib.sessions",
             "django.contrib.sites",
             "rest_framework",
-            "drf_chunked_upload",
+            "adrf_chunked_upload",
         ),
+        DATETIME_FORMAT="Y-m-d H:i:s",
+        TIME_ZONE="UTC",
         # our settings
-        DRF_CHUNKED_UPLOAD_ABSTRACT_MODEL=False,
-        DRF_CHUNKED_UPLOAD_MAX_BYTES=1000000,
+        ADRF_CHUNKED_UPLOAD_ABSTRACT_MODEL=False,
+        ADRF_CHUNKED_UPLOAD_MAX_BYTES=1000000,
     )

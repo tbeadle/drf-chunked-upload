@@ -30,6 +30,6 @@ setup(
         "adrf>=0.1.7",
         "aiofiles>=24.1.0",
     ],
-    python_requires=">3.8",
+    python_requires=">3.9",
     license="MIT-Zero",
 )

@@ -10,18 +10,12 @@ EXPIRATION_DELTA = getattr(
     settings, f"{_PREFIX}_EXPIRATION_DELTA", DEFAULT_EXPIRATION_DELTA
 )
 
-INCLUDE_FILE_URL_IN_RESPONSE = getattr(
-    settings, f"{_PREFIX}_INCLUDE_FILE_URL_IN_RESPONSE", False
-)
-
-# URL_BASENAME = getattr(settings, f"{_PREFIX}_URL_BASENAME", "chunkedupload")
-
 # Path where uploading files will be stored until completion
 DEFAULT_UPLOAD_PATH = "chunked_uploads/%Y/%m/%d"
 UPLOAD_PATH = getattr(settings, f"{_PREFIX}_PATH", DEFAULT_UPLOAD_PATH)
 
 # Checksum type to use when verifying files
-DEFAULT_CHECKSUM_TYPE = "md5"
+DEFAULT_CHECKSUM_TYPE = "sha256"
 CHECKSUM_TYPE = getattr(settings, f"{_PREFIX}_CHECKSUM", DEFAULT_CHECKSUM_TYPE)
 
 # File extensions for upload files

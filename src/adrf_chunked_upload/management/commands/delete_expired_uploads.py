@@ -1,12 +1,11 @@
-from collections import Counter
-
+import asyncio
 import django.apps
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from django.utils.translation import gettext as _
 
-from drf_chunked_upload import settings as _settings
-from drf_chunked_upload.models import AbstractChunkedUpload
+from adrf_chunked_upload import settings as _settings
+from adrf_chunked_upload.models import AbstractChunkedUpload
 
 
 PROMPT_MSG = _("Do you want to delete {obj}?")
@@ -46,14 +45,17 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        asyncio.run(self.ahandle(options))
+
+    async def ahandle(self, options):
         filter_models = options.get("models", None)
-        interactive = options.get("interactive")
-        delete_record = options.get("delete_record")
+        interactive = options.get("interactive", False)
+        delete_record = options.get("delete_record", True)
 
         upload_models = self.get_models(filter_models=filter_models)
 
         for model in upload_models:
-            self.process_model(
+            await self.process_model(
                 model, interactive=interactive, delete_record=delete_record
             )
 
@@ -62,7 +64,7 @@ class Command(BaseCommand):
         try:
             model_cls = django.apps.apps.get_app_config(model_app).get_model(model_name)
         except LookupError as e:
-            print("WARNING: {}", e)
+            print("WARNING: {}".format(e))
         else:
             if issubclass(model_cls, self.base_model):
                 return model_cls
@@ -94,7 +96,7 @@ class Command(BaseCommand):
 
         return upload_models
 
-    def process_model(self, model, interactive=False, delete_record=True):
+    async def process_model(self, model, interactive=False, delete_record=True):
         print(
             "Processing uploads for model {}.{}...".format(
                 model._meta.app_label,
@@ -102,36 +104,28 @@ class Command(BaseCommand):
             )
         )
 
-        count = Counter({state[0]: 0 for state in model.STATUS_CHOICES})
-
         chunked_uploads = model.objects.filter(
             created_at__lt=(timezone.now() - _settings.EXPIRATION_DELTA),
-            status=AbstractChunkedUpload.UPLOADING,
+            completed_at=None,
         )
 
-        if delete_record == False:
-            chunked_uploads = chunked_uploads.exclude(file__isnull=True)
-
-        for chunked_upload in chunked_uploads:
+        async for chunked_upload in chunked_uploads:
             if interactive and not self.get_confirmation(chunked_upload):
                 continue
 
-            count[chunked_upload.status] += 1
             # Deleting objects individually to call delete method explicitly
             if delete_record:
-                chunked_upload.delete()
+                await chunked_upload.adelete()
             else:
-                chunked_upload.delete_file()
-                chunked_upload.save()
+                await chunked_upload.adelete_file()
+                await chunked_upload.asave()
 
-        for state, number in count.items():
-            print(
-                "{} {} upload{}s were deleted.".format(
-                    number,
-                    dict(model.STATUS_CHOICES)[state].lower(),
-                    (" file" if not delete_record else ""),
-                )
+        print(
+            "{} upload{}s were deleted.".format(
+                len(chunked_uploads),
+                (" file" if not delete_record else ""),
             )
+        )
 
     def get_confirmation(self, chunked_upload):
         prompt = PROMPT_MSG.format(obj=chunked_upload) + " (y/n): "

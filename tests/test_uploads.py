@@ -2,32 +2,32 @@ import io
 import hashlib
 import pytest
 import importlib
-import time
-
 from datetime import timedelta
-from random import shuffle
+from random import randbytes
+from typing import Optional
 
-from django.core import management
+from asgiref.sync import sync_to_async
+from django.contrib.auth.models import User, AnonymousUser
+from django.http.response import Http404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIRequestFactory
-from django.contrib.auth.models import User, AnonymousUser
+from rest_framework import exceptions
 
-from drf_chunked_upload import settings as _settings
-from drf_chunked_upload.views import ChunkedUploadView
-from drf_chunked_upload.models import ChunkedUpload
-
-
-try:
-    from random import randbytes
-except ImportError:
-    import random
-
-    def randbytes(n):
-        """Generate n random bytes."""
-        return random.getrandbits(n * 8).to_bytes(n, "little")
+from adrf_chunked_upload import settings as _settings
+from adrf_chunked_upload.views import ChunkedUploadDetailView, ChunkedUploadListView
+from adrf_chunked_upload.models import ChunkedUpload
 
 
 factory = APIRequestFactory()
+
+
+class Chunk:
+    def __init__(self, offset, total_size, data):
+        self.offset = offset
+        self.total_size = total_size
+        self.data = data
+        self.end = self.offset + len(self.data) - 1
 
 
 class Chunks:
@@ -36,57 +36,70 @@ class Chunks:
         self.count = count
         self.total_size = self.chunk_size * self.count
         self.data = randbytes(self.total_size)
-        self.md5 = get_md5(self.data)
+        self.sha256 = get_sha256(self.data)
 
-    # TODO: make this an iterator and have an index method
+    def __getitem__(self, idx):
+        start = idx * self.chunk_size
+        return Chunk(
+            start,
+            self.total_size,
+            self.data[start : start + self.chunk_size],
+        )
+
+    def __iter__(self):
+        for idx in range(self.count):
+            yield self[idx]
 
 
-def get_md5(data):
-    return hashlib.md5(data).hexdigest()
+class NamedBytesIO(io.BytesIO):
+    """This can be used to simulate file uploads because it will include
+    the 'name' attribute as the 'filename' part of the content-disposition
+    header in multipart POST requests.
+    """
+
+    def __init__(self, name, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.name = name
+
+
+def get_sha256(data):
+    return hashlib.sha256(data).hexdigest()
 
 
 def build_request(
-    chunks,
-    chunk_index,
+    chunk: Optional[Chunk],
+    user: User,
     do_post=False,
     content_range=None,
     checksum=None,
-    no_chunk=False,
     extra_fields=None,
 ):
-    chunk = chunks.data[
-        chunk_index * chunks.chunk_size : (chunk_index + 1) * chunks.chunk_size
-    ]
-    # print(chunk)
-    if content_range is None:
-        content_range = "bytes {}-{}/{}".format(
-            chunk_index * chunks.chunk_size,
-            ((chunk_index + 1) * chunks.chunk_size) - 1,
-            chunks.chunk_size * chunks.count,
-        )
+    if content_range is None and chunk is not None and not do_post:
+        content_range = f"bytes {chunk.offset}-{chunk.end}/{chunk.total_size}"
 
-    request_dict = {"filename": "afile", "file": io.BytesIO(chunk)}
-
-    if no_chunk:
-        del request_dict["file"]
+    request_dict = {}
+    if chunk:
+        request_dict["file"] = NamedBytesIO("afile", chunk.data)
 
     if extra_fields:
         for k, v in extra_fields.items():
             request_dict[k] = v
 
-    mkrequest = factory.put
-
     if do_post:
-        request_dict["md5"] = checksum if checksum is not None else chunks.md5
+        if checksum:
+            request_dict["sha256"] = checksum
         mkrequest = factory.post
+    else:
+        mkrequest = factory.put
 
-    print(content_range)
-    return mkrequest(
-        "/",
-        request_dict,
-        format="multipart",
-        HTTP_CONTENT_RANGE=content_range,
-    )
+    kwargs = {
+        "format": "multipart",
+    }
+    if content_range is not None:
+        kwargs["HTTP_CONTENT_RANGE"] = content_range
+    req = mkrequest("/", request_dict, **kwargs)
+    req.user = user
+    return req
 
 
 @pytest.fixture(autouse=True)
@@ -99,214 +112,306 @@ def use_tmp_upload_dir(tmp_path, settings):
 
 @pytest.fixture
 def no_restrict_users(settings):
-    settings.DRF_CHUNKED_UPLOAD_USER_RESTRICTED = False
-    importlib.reload(_settings)
-
-
-@pytest.fixture
-def short_expirations(settings):
-    settings.DRF_CHUNKED_UPLOAD_EXPIRATION_DELTA = timedelta(microseconds=1)
+    settings.ADRF_CHUNKED_UPLOAD_USER_RESTRICTED = False
     importlib.reload(_settings)
 
 
 @pytest.fixture()
-def user1():
-    return User.objects.create_user(username="testuser1", password="12345")
+async def user1():
+    obj = await sync_to_async(User.objects.create_user)(
+        username="testuser1", password="12345"
+    )
+    try:
+        yield obj
+    finally:
+        await obj.adelete()
 
 
 @pytest.fixture()
-def user2():
-    return User.objects.create_user(username="testuser2", password="12345")
+async def user2():
+    obj = await sync_to_async(User.objects.create_user)(
+        username="testuser2", password="12345"
+    )
+    try:
+        yield obj
+    finally:
+        await obj.adelete()
 
 
 @pytest.fixture
-def view():
-    return ChunkedUploadView.as_view()
+def detail_view():
+    return ChunkedUploadDetailView.as_view()
+
+
+@pytest.fixture
+def list_view():
+    return ChunkedUploadListView.as_view()
 
 
 @pytest.fixture()
-def user1_uploads(user1):
+async def user1_uploads(user1):
     uploads = [
         ChunkedUpload(user=user1, filename="fakefile"),
-        ChunkedUpload(user=user1, filename="fakefile", status=ChunkedUpload.COMPLETE),
+        ChunkedUpload(user=user1, filename="fakefile", completed_at=timezone.now()),
     ]
     for upload in uploads:
-        upload.save()
-    return uploads
+        await upload.asave()
+    try:
+        yield uploads
+    finally:
+        for upload in uploads:
+            await upload.adelete()
 
 
 @pytest.fixture()
-def user2_uploads(user2):
+async def user2_uploads(user2):
     uploads = [
         ChunkedUpload(user=user2, filename="fakefile"),
         ChunkedUpload(user=user2, filename="fakefile"),
     ]
     for upload in uploads:
-        upload.save()
-    return uploads
+        await upload.asave()
+    try:
+        yield uploads
+    finally:
+        for upload in uploads:
+            await upload.adelete()
 
 
 @pytest.mark.django_db
-def test_print_chunked_upload(user1_uploads):
+async def test_print_chunked_upload(user1_uploads):
     assert (
         user1_uploads[0].__repr__()
-        == f"<fakefile - upload_id: {user1_uploads[0].id} - bytes: 0 - status: 1>"
+        == f"<fakefile - upload_id: {user1_uploads[0].id} - bytes: 0 - complete: False>"
+    )
+    assert (
+        user1_uploads[1].__repr__()
+        == f"<fakefile - upload_id: {user1_uploads[1].id} - bytes: 0 - complete: True>"
     )
 
 
 @pytest.mark.django_db
-def test_chunked_upload(view, user1):
+async def test_chunked_upload(detail_view, list_view, user1, freezer):
+    """Validate that uploading a file in chunks works as expected."""
+    freezer.move_to("2024-10-02")
     chunks = Chunks()
     pk = None
-    for index in range(chunks.count):
-        request = build_request(chunks, index)
-        request.user = user1
-        response = view(request, pk=pk)
-        print(response.data)
+    view = list_view
+    for chunk in chunks:
+        request = build_request(chunk, user1)
+        response = await view(request, pk=pk)
         assert response.status_code == status.HTTP_200_OK
-        pk = response.data["id"]
+        obj = await ChunkedUpload.objects.afirst()
+        assert response.data == {
+            "id": str(obj.pk),
+            "url": f"http://testserver/{obj.pk}/",
+            "completed_at": None,
+            "created_at": "2024-10-02T00:00:00Z",
+            "expires_at": "2024-10-03T00:00:00Z",
+            "filename": "afile",
+            "offset": chunk.end + 1,
+            "user": user1.pk,
+        }
+        pk = str(obj.pk)
+        view = detail_view
     request = factory.post(
         "/",
-        {"md5": chunks.md5},
+        {"sha256": chunks.sha256},
         format="multipart",
     )
     request.user = user1
-    response = view(request, pk=pk)
-    print(response.data)
+    freezer.move_to("2024-10-02 12:00:00Z")
+    response = await view(request, pk=pk)
     assert response.status_code == status.HTTP_200_OK
+    assert response.data == {
+        "id": str(obj.pk),
+        "url": f"http://testserver/{obj.pk}/",
+        "filename": "afile",
+        "offset": chunks.total_size,
+        "created_at": "2024-10-02T00:00:00Z",
+        "completed_at": "2024-10-02T12:00:00Z",
+        "user": user1.pk,
+        "expires_at": None,
+    }
 
 
 @pytest.mark.django_db
-def test_chunked_upload_wrong_order(view, user1):
+async def test_chunked_upload_wrong_order(detail_view, list_view, user1, freezer):
+    """Validate that sending a chunk out of order (in other words, the
+    Content-Range header is for a byte range different than what is expected)
+    results in an HTTP 400.
+    """
     chunks = Chunks(chunk_size=10, count=5)
     pk = None
-    request = build_request(chunks, 0)
-    request.user = user1
-    response = view(request, pk=pk)
+    chunk = chunks[0]
+    request = build_request(chunk, user1)
+    freezer.move_to("2024-10-02")
+    response = await list_view(request)
     assert response.status_code == status.HTTP_200_OK
-    pk = response.data["id"]
-    request = build_request(chunks, 2)
-    request.user = user1
-    response = view(request, pk=pk)
-    print(response.data)
+    obj = await ChunkedUpload.objects.afirst()
+    assert response.data == {
+        "id": str(obj.pk),
+        "url": f"http://testserver/{obj.pk}/",
+        "completed_at": None,
+        "created_at": "2024-10-02T00:00:00Z",
+        "expires_at": "2024-10-03T00:00:00Z",
+        "filename": "afile",
+        "offset": chunk.end + 1,
+        "user": user1.pk,
+    }
+    pk = str(obj.pk)
+
+    chunk = chunks[2]
+    request = build_request(chunk, user1)
+    response = await detail_view(request, pk=pk)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["detail"] == "Offsets do not match"
-    assert response.data["expected_offset"] == 10
-    assert response.data["provided_offset"] == 20
+    assert "content-range" in response.data["detail"]
 
 
 @pytest.mark.django_db
-def test_chunked_upload_no_checksum(view, user1):
+async def test_complete_upload_no_checksum(list_view, user1):
+    """Send a complete upload, but do not include the checksum."""
     request = factory.post(
         "/",
+        {"file": NamedBytesIO("afile", b"abcdef")},
+        format="multipart",
+    )
+    request.user = user1
+    with pytest.raises(exceptions.ValidationError) as err:
+        await list_view(request)
+    assert "sha256" in err.value.detail
+
+
+@pytest.mark.django_db
+async def test_chunked_upload_no_checksum(detail_view, list_view, user1):
+    """Send the first (and only) chunk. Then send the POST to complete
+    the upload, but with no checksum included.
+    """
+    chunks = Chunks(count=1)
+    chunk = chunks[0]
+    request = build_request(chunk, user1)
+    response = await list_view(request)
+    assert response.status_code == status.HTTP_200_OK
+
+    request = factory.post(
+        f"/{response.data['id']}/",
         {},
         format="multipart",
     )
     request.user = user1
-    response = view(request, pk=1)
-    print(response.data)
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["detail"] == "Checksum of type 'md5' is required"
+    with pytest.raises(exceptions.ValidationError) as err:
+        await detail_view(request, pk=response.data["id"])
+    assert "sha256" in err.value.detail
 
 
 @pytest.mark.django_db
-def test_wrong_user(view, user1_uploads, user2):
+async def test_wrong_user(detail_view, user1_uploads, user2):
     chunks = Chunks()
     pk = user1_uploads[0].id
-    request = build_request(chunks, 3)
-    request.user = user2
-    response = view(request, pk=pk)
-    print(response.data)
-    assert response.status_code == status.HTTP_404_NOT_FOUND
+    request = build_request(chunks[3], user2)
+    with pytest.raises(Http404):
+        await detail_view(request, pk=str(pk))
 
 
 @pytest.mark.django_db
-def test_resume_expired(view, user1, user1_uploads, short_expirations):
-    # sleep to ensure upload expires
-    time.sleep(0.01)
+async def test_resume_expired(detail_view, user1, user1_uploads, freezer):
     chunks = Chunks()
     pk = user1_uploads[0].id
-    request = build_request(chunks, 0)
-    request.user = user1
-    response = view(request, pk=pk)
-    print(response.data)
+    freezer.move_to(user1_uploads[0].expires_at + timedelta(milliseconds=1))
+    request = build_request(chunks[0], user1)
+    response = await detail_view(request, pk=str(pk))
     assert response.status_code == status.HTTP_410_GONE
 
 
 @pytest.mark.django_db
-def test_resume_completed(view, user1, user1_uploads):
+async def test_resume_completed(detail_view, user1, user1_uploads):
     chunks = Chunks()
     pk = user1_uploads[1].id
-    request = build_request(chunks, 5)
-    request.user = user1
-    response = view(request, pk=pk)
-    print(response.data)
+    request = build_request(chunks[5], user1)
+    response = await detail_view(request, pk=str(pk))
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["detail"] == 'Upload has already been marked as "complete"'
+    assert response.data["detail"] == "Upload has already been marked as 'complete'"
 
 
 bad_content_ranges = [
-    ("bytes nonsense", "Error in request headers"),
+    ("bytes nonsense", "Invalid Content-Range header"),
     ("bytes 0-100000/5", "End of chunk exceeds reported total (5 bytes)"),
     (
         "bytes 0-9999/999999999999999999999",
-        "Size of file exceeds the limit (1000000 bytes)",
+        "Size of file (999999999999999999999) exceeds the limit (1000000 bytes)",
     ),
     (
         "bytes 0-1/100000",
-        "File size doesn't match headers: file size is 10000 but 2 reported",
+        "Chunk size doesn't match headers: chunk size is 10000 but 2 reported",
     ),
 ]
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("cr", bad_content_ranges)
-def test_bad_content_range(cr, view, user1):
+async def test_bad_content_range(cr, list_view, user1):
     chunks = Chunks()
-    request = build_request(chunks, 0, content_range=cr[0])
-    request.user = user1
-    response = view(request)
-    print(response.data)
+    request = build_request(chunks[0], user1, content_range=cr[0])
+    response = await list_view(request)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.data["detail"] == cr[1]
 
 
 @pytest.mark.django_db
-def test_post_upload(view, user1):
+async def test_complete_upload(list_view, user1, freezer):
     chunks = Chunks(chunk_size=100000, count=1)
-    request = build_request(chunks, 0, do_post=True)
-    request.user = user1
-    response = view(request)
+    freezer.move_to("2024-10-02")
+    request = build_request(chunks[0], user1, checksum=chunks.sha256, do_post=True)
+    response = await list_view(request)
     assert response.status_code == status.HTTP_200_OK
+    obj = await ChunkedUpload.objects.afirst()
+    assert response.data == {
+        "id": str(obj.pk),
+        "url": f"http://testserver/{obj.pk}/",
+        "filename": "afile",
+        "offset": chunks.total_size,
+        "created_at": "2024-10-02T00:00:00Z",
+        "completed_at": "2024-10-02T00:00:00Z",
+        "user": user1.pk,
+        "expires_at": None,
+    }
 
 
 @pytest.mark.django_db
-def test_bad_checksum(view, user1):
+async def test_bad_checksum(list_view, user1):
     chunks = Chunks(chunk_size=100000, count=1)
-    request = build_request(chunks, 0, do_post=True, checksum="12345")
-    request.user = user1
-    response = view(request)
-    print(response.data)
+    request = build_request(chunks[0], user1, do_post=True, checksum="a" * 64)
+    response = await list_view(request)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
     assert response.data["detail"] == "checksum does not match"
 
 
 @pytest.mark.django_db
-def test_no_chunk(view, user1):
-    chunks = Chunks(chunk_size=100000, count=1)
-    request = build_request(chunks, 0, do_post=True, no_chunk=True)
-    request.user = user1
-    response = view(request)
-    print(response.data)
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["detail"] == "No chunk file was submitted"
+@pytest.mark.parametrize("do_post", (True, False))
+async def test_list_view_no_chunk(list_view, user1, do_post):
+    request = build_request(None, user1, do_post=do_post)
+    with pytest.raises(exceptions.ValidationError) as err:
+        await list_view(request)
+    assert "file" in err.value.detail
 
 
 @pytest.mark.django_db
-def test_list_uploads(view, user1, user1_uploads, user2_uploads):
+async def test_detail_view_no_chunk(detail_view, list_view, user1):
+    chunks = Chunks()
+    request = build_request(chunks[0], user1)
+    response = await list_view(request)
+    assert response.status_code == status.HTTP_200_OK
+    request = build_request(None, user1)
+    with pytest.raises(exceptions.ValidationError) as err:
+        response = await detail_view(request, pk=response.data["id"])
+    assert "file" in err.value.detail
+
+
+@pytest.mark.django_db
+async def test_list_uploads(list_view, user1, user1_uploads):
     request = factory.get("/")
     request.user = user1
-    response = view(request)
+    response = await list_view(request)
     assert response.status_code == status.HTTP_200_OK
     user1_upload_pks = sorted([str(ul.pk) for ul in user1_uploads])
     resp_upload_pks = sorted([ul["id"] for ul in response.data])
@@ -314,46 +419,51 @@ def test_list_uploads(view, user1, user1_uploads, user2_uploads):
 
 
 @pytest.mark.django_db
-def test_get_upload(view, user1, user1_uploads):
+async def test_get_upload(detail_view, user1, user1_uploads):
     pk = str(user1_uploads[0].pk)
-    request = factory.get("/")
+    request = factory.get(f"/{pk}/")
     request.user = user1
-    response = view(request, pk=pk)
+    response = await detail_view(request, pk=pk)
     assert response.status_code == status.HTTP_200_OK
-    print(response.data)
     assert response.data["id"] == pk
 
 
 @pytest.mark.django_db
-def test_list_uploads_no_user_restricted(view, user1_uploads):
+async def test_get_upload_wrong_user(detail_view, user2, user1_uploads):
+    pk = str(user1_uploads[0].pk)
+    request = factory.get(f"/{pk}/")
+    request.user = user2
+    with pytest.raises(Http404):
+        await detail_view(request, pk=pk)
+
+
+@pytest.mark.django_db
+async def test_list_uploads_no_user_restricted(list_view):
     request = factory.get("/")
-    response = view(request)
+    response = await list_view(request)
     assert response.status_code == status.HTTP_200_OK
     assert response.data == []
 
 
 @pytest.mark.django_db
-def test_anonymous_upload(view):
+async def test_anonymous_upload(list_view):
     chunks = Chunks(chunk_size=100000, count=1)
-    request = build_request(chunks, 0, do_post=True)
-    request.user = AnonymousUser
-    response = view(request)
-    print(response.data)
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert (
-        response.data["detail"]
-        == "Upload requires user authentication but user cannot be determined"
+    request = build_request(
+        chunks[0], AnonymousUser, checksum=chunks.sha256, do_post=True
     )
+    with pytest.raises(exceptions.ValidationError) as err:
+        await list_view(request)
+    assert "logged in user is required" in err.value.detail[0]
 
 
 @pytest.mark.django_db
-def test_list_uploads_no_user_not_restricted(
-    view, user1_uploads, user2_uploads, no_restrict_users
+@pytest.mark.usefixtures("no_restrict_users")
+async def test_list_uploads_no_user_not_restricted(
+    list_view, user1_uploads, user2_uploads
 ):
     request = factory.get("/")
-    response = view(request)
+    response = await list_view(request)
     assert response.status_code == status.HTTP_200_OK
-    print(response.data)
     uploads = user1_uploads + user2_uploads
     upload_pks = sorted([str(ul.pk) for ul in uploads])
     resp_upload_pks = sorted([ul["id"] for ul in response.data])

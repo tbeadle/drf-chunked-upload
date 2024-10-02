@@ -1,25 +1,48 @@
 from adrf import serializers as adrf_serializers
+from rest_framework import fields, serializers
 
-# from rest_framework.reverse import reverse
-# from rest_framework.serializers import SerializerMethodField
 
 from . import settings as _settings
 from .models import ChunkedUpload
 
 
-class ChunkedUploadSerializer(adrf_serializers.ModelSerializer):
-    # viewname = f"{_settings.URL_BASENAME}-detail"
-    # url = SerializerMethodField()
-
-    # def get_url(self, obj):
-    #     return reverse(
-    #         self.viewname, kwargs={"pk": obj.id}, request=self.context["request"]
-    #     )
+class UploadResponseSerializer(adrf_serializers.ModelSerializer):
+    expires_at = serializers.DateTimeField()
 
     class Meta:
         model = ChunkedUpload
-        fields = "__all__"
-        read_only_fields = ("status", "completed_at")
-        extra_kwargs = {
-            "file": {"write_only": not _settings.INCLUDE_FILE_URL_IN_RESPONSE}
-        }
+        fields = [
+            "id",
+            "url",
+            "filename",
+            "offset",
+            "created_at",
+            "completed_at",
+            "user",
+            "expires_at",
+        ]
+
+
+class ChunkedUploadSerializer(adrf_serializers.ModelSerializer):
+    class Meta:
+        model = ChunkedUpload
+        fields = [
+            "file",
+        ]
+
+
+class ChecksumFieldMixin:
+    def get_fields(self):
+        retval = super().get_fields()
+        retval[_settings.CHECKSUM_TYPE] = fields.CharField(
+            required=True, allow_blank=False
+        )
+        return retval
+
+
+class CompleteUploadSerializer(ChecksumFieldMixin, ChunkedUploadSerializer):
+    pass
+
+
+class FinishUploadSerializer(ChecksumFieldMixin, adrf_serializers.Serializer):
+    pass

@@ -1,13 +1,16 @@
 import time
 import os.path
 import hashlib
+from typing import Optional
 import uuid
+from datetime import datetime
 
 import aiofiles
 import aiofiles.os
-from django.db import models, transaction
-from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
+from django.db import models
+from django.conf import settings
+from django.core.files.storage import FileSystemStorage
 from django.utils import timezone
 
 from adrf_chunked_upload import settings as _settings
@@ -25,9 +28,8 @@ def generate_filename(instance, filename):
 class AbstractChunkedUpload(models.Model):
     """Inherit from this model if you are implementing your own."""
 
-    class StatusChoices(models.IntegerChoices):
-        UPLOADING = 1, "Incomplete"
-        COMPLETE = 2, "Complete"
+    class Meta:
+        abstract = True
 
     id = models.UUIDField(
         primary_key=True,
@@ -38,7 +40,6 @@ class AbstractChunkedUpload(models.Model):
         max_length=255,
         upload_to=generate_filename,
         storage=_settings.STORAGE,
-        null=True,
     )
     filename = models.CharField(max_length=255)
     offset = models.BigIntegerField(default=0)
@@ -46,30 +47,29 @@ class AbstractChunkedUpload(models.Model):
         auto_now_add=True,
         editable=False,
     )
-    status = models.PositiveSmallIntegerField(
-        choices=StatusChoices,
-        default=StatusChoices.UPLOADING,
-    )
     completed_at = models.DateTimeField(
         null=True,
         blank=True,
     )
 
     @property
-    def expires_at(self):
-        return self.created_at + _settings.EXPIRATION_DELTA
+    def expires_at(self) -> Optional[datetime]:
+        return (
+            None if self.is_complete else self.created_at + _settings.EXPIRATION_DELTA
+        )
 
     @property
-    def expired(self):
-        return (
-            self.status == self.StatusChoices.UPLOADING
-            and self.expires_at <= timezone.now()
-        )
+    def expired(self) -> bool:
+        return not self.is_complete and self.expires_at <= timezone.now()
+
+    @property
+    def is_complete(self) -> bool:
+        return self.completed_at is not None
 
     @staticmethod
     async def calculate_checksum(filelike):
         h = hashlib.new(_settings.CHECKSUM_TYPE)
-        with aiofiles.open(filelike, mode="rb") as fil:
+        async with aiofiles.open(filelike, mode="rb") as fil:
             while True:
                 chunk = await fil.read(64 * 2**10)
                 if not chunk:
@@ -79,45 +79,47 @@ class AbstractChunkedUpload(models.Model):
 
     async def checksum(self, rehash=False):
         if getattr(self, "_checksum", None) is None or rehash is True:
-            self._checksum = await self.calculate_checksum(self.file)
+            self._checksum = await self.calculate_checksum(self.file.path)
         return self._checksum
 
-    def delete_file(self):
+    async def adelete_file(self):
         if self.file:
             storage, path = self.file.storage, self.file.path
-            storage.delete(path)
+            if isinstance(storage, FileSystemStorage):
+                try:
+                    await aiofiles.os.unlink(path)
+                except FileNotFoundError:  # pragma: no cover
+                    pass
+            else:
+                storage.delete(path)  # pragma: no cover
         self.file = None
 
-    @transaction.atomic
-    def delete(self, delete_file=True, *args, **kwargs):
-        super().delete(*args, **kwargs)
+    async def adelete(self, delete_file=True, *args, **kwargs):
+        await super().adelete(*args, **kwargs)
         if delete_file:
-            self.delete_file()
+            await self.adelete_file()
 
     def __repr__(self):
-        return "<{} - upload_id: {} - bytes: {} - status: {}>".format(
+        return "<{} - upload_id: {} - bytes: {} - complete: {}>".format(
             self.filename,
             self.id,
             self.offset,
-            self.status,
+            self.is_complete,
         )
 
-    async def append_chunk(self, chunk, chunk_size=None, save=True):
-        with aiofiles.open(self.file, mode="ab") as fil:
+    async def append_chunk(self, chunk: UploadedFile):
+        if self.file is None:
+            raise AssertionError(  # pragma: no cover
+                "append_chunk() can only be called after saving an initial file"
+            )
+        async with aiofiles.open(self.file.path, mode="ab") as fil:
             for subchunk in chunk.chunks():
                 await fil.write(subchunk)
-        if chunk_size is not None:
-            self.offset += chunk_size
-        elif hasattr(chunk, "size"):
-            self.offset += chunk.size
-        else:
-            self.offset = await aiofiles.os.path.getsize(self.file.path)
+        self.offset += chunk.size
         # clear any cached checksum
         self._checksum = None
-        if save:
-            await self.asave()
+        await self.asave()
 
-    @transaction.atomic
     async def completed(self, completed_at=None, ext=_settings.COMPLETE_EXT):
         if completed_at is None:
             completed_at = timezone.now()
@@ -125,7 +127,6 @@ class AbstractChunkedUpload(models.Model):
         if ext != _settings.INCOMPLETE_EXT:
             original_path = self.file.path
             self.file.name = os.path.splitext(self.file.name)[0] + ext
-        self.status = self.StatusChoices.COMPLETE
         self.completed_at = completed_at
         await self.asave()
         if ext != _settings.INCOMPLETE_EXT:
@@ -133,9 +134,6 @@ class AbstractChunkedUpload(models.Model):
                 original_path,
                 os.path.splitext(self.file.path)[0] + ext,
             )
-
-    class Meta:
-        abstract = True
 
 
 class ChunkedUpload(AbstractChunkedUpload):
