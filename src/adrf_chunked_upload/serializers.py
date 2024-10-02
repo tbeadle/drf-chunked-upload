@@ -23,12 +23,10 @@ class UploadResponseSerializer(adrf_serializers.ModelSerializer):
         ]
 
 
-class ChunkedUploadSerializer(adrf_serializers.ModelSerializer):
-    class Meta:
-        model = ChunkedUpload
-        fields = [
-            "file",
-        ]
+class ChunkedUploadSerializer(adrf_serializers.Serializer):
+    file = serializers.FileField(
+        max_length=ChunkedUpload._meta.get_field("file").max_length
+    )
 
 
 class ChecksumFieldMixin:
