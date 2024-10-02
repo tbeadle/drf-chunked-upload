@@ -20,6 +20,10 @@ from .exceptions import ChunkedUploadError
 class ChunkedUploadMixin:
     model = ChunkedUpload
     user_field_name = "user"  # the field name that point towards the AUTH_USER in ChunkedUpload class or its subclasses
+
+    chunked_upload_serializer_class = ChunkedUploadSerializer
+    complete_upload_serializer_class = CompleteUploadSerializer
+    finish_upload_serializer_class = FinishUploadSerializer
     response_serializer_class = UploadResponseSerializer
 
     # I wouldn't recommend turning off the checksum check,
@@ -190,9 +194,9 @@ class ChunkedUploadDetailView(ChunkedUploadMixin, RetrieveAPIView):
         if self.request.method in ("GET", "HEAD"):
             return self.response_serializer_class
         if self.request.method == "PUT":
-            return ChunkedUploadSerializer
+            return self.chunked_upload_serializer_class
         if self.request.method == "POST":
-            return FinishUploadSerializer
+            return self.finish_upload_serializer_class
         raise exceptions.MethodNotAllowed
 
     async def post(self, request, pk, *args, **kwargs) -> Response:
@@ -242,9 +246,9 @@ class ChunkedUploadListView(ChunkedUploadMixin, ListAPIView):
         if self.request.method in ("GET", "HEAD"):
             return self.response_serializer_class
         if self.request.method == "PUT":
-            return ChunkedUploadSerializer
+            return self.chunked_upload_serializer_class
         if self.request.method == "POST":
-            return CompleteUploadSerializer
+            return self.complete_upload_serializer_class
         raise exceptions.MethodNotAllowed
 
     def get_user(self):
