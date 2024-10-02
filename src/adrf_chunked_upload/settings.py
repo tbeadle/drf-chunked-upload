@@ -26,7 +26,7 @@ INCOMPLETE_EXT = getattr(settings, f"{_PREFIX}_INCOMPLETE_EXT", ".part")
 STORAGE = getattr(settings, f"{_PREFIX}_STORAGE_CLASS", lambda: None)()
 
 # Boolean that defines if the ChunkedUpload model is abstract or not
-ABSTRACT_MODEL = getattr(settings, f"{_PREFIX}_ABSTRACT_MODEL", True)
+ABSTRACT_MODEL = getattr(settings, f"{_PREFIX}_ABSTRACT_MODEL", False)
 
 # Boolean that defines if users beside the creator can access an upload record
 USER_RESTRICTED = getattr(settings, f"{_PREFIX}_USER_RESTRICTED", True)

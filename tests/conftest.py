@@ -30,6 +30,5 @@ def pytest_configure():
         DATETIME_FORMAT="Y-m-d H:i:s",
         TIME_ZONE="UTC",
         # our settings
-        ADRF_CHUNKED_UPLOAD_ABSTRACT_MODEL=False,
         ADRF_CHUNKED_UPLOAD_MAX_BYTES=1000000,
     )
