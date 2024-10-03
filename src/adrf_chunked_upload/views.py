@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework import exceptions, status
 
 from . import settings as _settings
+from .exceptions import ChunkedUploadError
 from .models import ChunkedUpload
 from .serializers import (
     ChunkedUploadSerializer,
@@ -14,7 +15,6 @@ from .serializers import (
     FinishUploadSerializer,
     UploadResponseSerializer,
 )
-from .exceptions import ChunkedUploadError
 
 
 class ChunkedUploadMixin:
@@ -41,16 +41,7 @@ class ChunkedUploadMixin:
         Verify if checksum sent by client matches generated checksum.
         """
         if await chunked_upload.checksum() != checksum:
-            raise ChunkedUploadError(
-                status=status.HTTP_400_BAD_REQUEST, detail="checksum does not match"
-            )
-
-    def exception_handler(self, exc, context) -> Optional[Response]:
-        if isinstance(exc, ChunkedUploadError):
-            return Response(exc.data, status=exc.status_code)
-
-    def get_exception_handler(self):
-        return self.exception_handler
+            raise exceptions.ValidationError({"checksum": "checksum does not match"})
 
     def get_max_bytes(self):
         """
@@ -92,17 +83,15 @@ class ChunkedUploadMixin:
         chunk = self.serializer.validated_data["file"]
         filename = getattr(chunk, "name", "")
         if not filename:
-            raise ChunkedUploadError(
-                status=status.HTTP_400_BAD_REQUEST,
-                detail="No chunk filename was passed in the Content-Disposition",
+            raise exceptions.ValidationError(
+                "No chunk filename was passed in the Content-Disposition"
             )
 
         content_range: Optional[str] = None
         if self.request.method == "POST":
             if "HTTP_CONTENT_RANGE" in self.request.META:
-                raise ChunkedUploadError(
-                    status=status.HTTP_400_BAD_REQUEST,
-                    detail="A Content-Range header should not be supplied in POST requests",
+                raise exceptions.ValidationError(
+                    "A Content-Range header should not be supplied in POST requests",
                 )
         elif self.request.method == "PUT":
             content_range = self.request.META.get("HTTP_CONTENT_RANGE")
@@ -118,33 +107,27 @@ class ChunkedUploadMixin:
         else:
             match = self.content_range_pattern.match(content_range)
             if not match:
-                raise ChunkedUploadError(
-                    status=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid Content-Range header",
-                )
+                raise exceptions.ValidationError("Invalid Content-Range header")
 
             start = int(match.group("start"))
             end = int(match.group("end"))
             total = int(match.group("total"))
 
             if end >= total:
-                raise ChunkedUploadError(
-                    status=status.HTTP_400_BAD_REQUEST,
-                    detail=f"End of chunk exceeds reported total ({total} bytes)",
+                raise exceptions.ValidationError(
+                    f"End of chunk exceeds reported total ({total} bytes)",
                 )
 
             chunk_size = end - start + 1
             if chunk.size != chunk_size:
-                raise ChunkedUploadError(
-                    status=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Chunk size doesn't match headers: chunk size is {chunk.size} but {chunk_size} reported",
+                raise exceptions.ValidationError(
+                    f"Chunk size doesn't match headers: chunk size is {chunk.size} but {chunk_size} reported",
                 )
 
         max_bytes = self.get_max_bytes()
         if max_bytes is not None and total > max_bytes:
-            raise ChunkedUploadError(
-                status=status.HTTP_400_BAD_REQUEST,
-                detail=f"Size of file ({total}) exceeds the limit ({max_bytes} bytes)",
+            raise exceptions.ValidationError(
+                f"Size of file ({total}) exceeds the limit ({max_bytes} bytes)",
             )
 
         return {
@@ -182,15 +165,15 @@ class ChunkedUploadDetailView(ChunkedUploadMixin, RetrieveAPIView):
         chunked_upload = await super().aget_object()
         if chunked_upload.expired:
             raise ChunkedUploadError(
-                status=status.HTTP_410_GONE, detail="Upload has expired"
+                "Upload has expired",
+                status_code=status.HTTP_410_GONE,
             )
         return chunked_upload
 
     def assert_upload_is_incomplete(self, chunked_upload: ChunkedUploadMixin.model):
         if chunked_upload.is_complete:
             raise ChunkedUploadError(
-                status=status.HTTP_400_BAD_REQUEST,
-                detail="Upload has already been marked as 'complete'",
+                "Upload has already been marked as 'complete'",
             )
 
     def get_serializer_class(self) -> Type[adrf_serializers.Serializer]:
@@ -230,8 +213,7 @@ class ChunkedUploadDetailView(ChunkedUploadMixin, RetrieveAPIView):
         data, start = self.get_chunk()
         if instance.offset != start:
             raise ChunkedUploadError(
-                status=status.HTTP_400_BAD_REQUEST,
-                detail=f"Start of content-range ({start}) does not match expected value ({instance.offset})",
+                f"Start of content-range ({start}) does not match expected value ({instance.offset})",
             )
         await instance.append_chunk(data["file"])
 
@@ -258,7 +240,7 @@ class ChunkedUploadListView(ChunkedUploadMixin, ListAPIView):
         except AttributeError:
             raise AssertionError("A request context is required.")
         if not user.is_authenticated:
-            raise exceptions.ValidationError("A logged in user is required.")
+            raise exceptions.ValidationError({"user": "A logged in user is required."})
         return user
 
     async def post(self, request, *args, **kwargs) -> Response:

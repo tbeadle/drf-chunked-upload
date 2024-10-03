@@ -277,9 +277,9 @@ async def test_complete_upload_no_checksum(list_view, user1):
         format="multipart",
     )
     request.user = user1
-    with pytest.raises(exceptions.ValidationError) as err:
-        await list_view(request)
-    assert "sha256" in err.value.detail
+    response = await list_view(request)
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "sha256" in response.data
 
 
 @pytest.mark.django_db
@@ -299,9 +299,9 @@ async def test_chunked_upload_no_checksum(detail_view, list_view, user1):
         format="multipart",
     )
     request.user = user1
-    with pytest.raises(exceptions.ValidationError) as err:
-        await detail_view(request, pk=response.data["id"])
-    assert "sha256" in err.value.detail
+    response = await detail_view(request, pk=response.data["id"])
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "sha256" in response.data
 
 
 @pytest.mark.django_db
@@ -309,8 +309,8 @@ async def test_wrong_user(detail_view, user1_uploads, user2):
     chunks = Chunks()
     pk = user1_uploads[0].id
     request = build_request(chunks[3], user2)
-    with pytest.raises(Http404):
-        await detail_view(request, pk=str(pk))
+    response = await detail_view(request, pk=str(pk))
+    assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 @pytest.mark.django_db
@@ -354,7 +354,7 @@ async def test_bad_content_range(cr, list_view, user1):
     request = build_request(chunks[0], user1, content_range=cr[0])
     response = await list_view(request)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["detail"] == cr[1]
+    assert str(response.data[0]) == cr[1]
 
 
 @pytest.mark.django_db
@@ -383,16 +383,16 @@ async def test_bad_checksum(list_view, user1):
     request = build_request(chunks[0], user1, do_post=True, checksum="a" * 64)
     response = await list_view(request)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["detail"] == "checksum does not match"
+    assert response.data["checksum"] == "checksum does not match"
 
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("do_post", (True, False))
 async def test_list_view_no_chunk(list_view, user1, do_post):
-    request = build_request(None, user1, do_post=do_post)
-    with pytest.raises(exceptions.ValidationError) as err:
-        await list_view(request)
-    assert "file" in err.value.detail
+    request = build_request(None, user1, do_post=do_post, checksum="a" * 64)
+    response = await list_view(request)
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "file" in response.data
 
 
 @pytest.mark.django_db
@@ -402,9 +402,9 @@ async def test_detail_view_no_chunk(detail_view, list_view, user1):
     response = await list_view(request)
     assert response.status_code == status.HTTP_200_OK
     request = build_request(None, user1)
-    with pytest.raises(exceptions.ValidationError) as err:
-        response = await detail_view(request, pk=response.data["id"])
-    assert "file" in err.value.detail
+    response = await detail_view(request, pk=response.data["id"])
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "file" in response.data
 
 
 @pytest.mark.django_db
@@ -433,8 +433,8 @@ async def test_get_upload_wrong_user(detail_view, user2, user1_uploads):
     pk = str(user1_uploads[0].pk)
     request = factory.get(f"/{pk}/")
     request.user = user2
-    with pytest.raises(Http404):
-        await detail_view(request, pk=pk)
+    response = await detail_view(request, pk=pk)
+    assert response.status_code == status.HTTP_404_NOT_FOUND
 
 
 @pytest.mark.django_db
@@ -451,9 +451,9 @@ async def test_anonymous_upload(list_view):
     request = build_request(
         chunks[0], AnonymousUser, checksum=chunks.sha256, do_post=True
     )
-    with pytest.raises(exceptions.ValidationError) as err:
-        await list_view(request)
-    assert "logged in user is required" in err.value.detail[0]
+    response = await list_view(request)
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "logged in user is required" in response.data["user"]
 
 
 @pytest.mark.django_db
