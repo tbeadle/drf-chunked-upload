@@ -383,7 +383,7 @@ async def test_bad_checksum(list_view, user1):
     request = build_request(chunks[0], user1, do_post=True, checksum="a" * 64)
     response = await list_view(request)
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert response.data["checksum"] == "checksum does not match"
+    assert response.data["sha256"] == "checksum does not match"
 
 
 @pytest.mark.django_db

@@ -41,7 +41,9 @@ class ChunkedUploadMixin:
         Verify if checksum sent by client matches generated checksum.
         """
         if await chunked_upload.checksum() != checksum:
-            raise exceptions.ValidationError({"checksum": "checksum does not match"})
+            raise exceptions.ValidationError(
+                {_settings.CHECKSUM_TYPE: "checksum does not match"}
+            )
 
     def get_max_bytes(self):
         """
