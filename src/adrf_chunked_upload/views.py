@@ -72,9 +72,9 @@ class ChunkedUploadMixin:
         return queryset
 
     async def finalize_upload(
-        self, chunked_upload: ChunkedUpload, checksum: str
+        self, chunked_upload: ChunkedUpload, checksum: Optional[str]
     ) -> Optional[Response]:
-        if self.do_checksum_check:
+        if self.do_checksum_check and checksum is not None:
             await self.checksum_check(chunked_upload, checksum)
 
         await chunked_upload.completed()
@@ -151,7 +151,7 @@ class ChunkedUploadMixin:
         return self.response_serializer_class
 
     async def on_completion(
-        self, chunked_upload: model, checksum: str
+        self, chunked_upload: model, checksum: Optional[str]
     ) -> Optional[Response]:
         """
         This may be overridden in child classes to do more validation or operations
@@ -194,7 +194,7 @@ class ChunkedUploadDetailView(ChunkedUploadMixin, RetrieveAPIView):
         self.serializer = self.get_serializer(data=request.data)
         self.serializer.is_valid(raise_exception=True)
         response = await self.finalize_upload(
-            chunked_upload, self.serializer.validated_data[_settings.CHECKSUM_TYPE]
+            chunked_upload, self.serializer.validated_data.get(_settings.CHECKSUM_TYPE)
         )
         if response is None:
             response = await self.get_response(chunked_upload)
@@ -249,7 +249,7 @@ class ChunkedUploadListView(ChunkedUploadMixin, ListAPIView):
         """Upload an entire file."""
         chunked_upload = await self.create_chunked_upload_from_request(request)
         response = await self.finalize_upload(
-            chunked_upload, self.serializer.validated_data[_settings.CHECKSUM_TYPE]
+            chunked_upload, self.serializer.validated_data.get(_settings.CHECKSUM_TYPE)
         )
         if response is None:
             response = await self.get_response(chunked_upload)
